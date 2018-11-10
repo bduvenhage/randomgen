@@ -572,9 +572,9 @@ cdef class RandomGenerator:
                 randoms_data[i] = random_positive_int(self._brng)
         return randoms
 
-    def randint(self, low, high=None, size=None, dtype=int):
+    def randint(self, low, high=None, size=None, dtype=int, use_masked=True):
         """
-        randint(low, high=None, size=None, dtype='l')
+        randint(low, high=None, size=None, dtype='l', use_masked=True)
 
         Return random integers from `low` (inclusive) to `high` (exclusive).
 
@@ -603,6 +603,13 @@ cdef class RandomGenerator:
             on the platform. The default value is 'np.int'.
 
             .. versionadded:: 1.11.0
+
+        use_masked : bool
+            If True the generator uses rejection sampling with a bit mask to
+            reject random numbers that are out of bounds. If False the generator
+            will use Lemire's rejection sampling algorithm.
+
+            .. versionadded:: 1.15.1
 
         Returns
         -------
@@ -645,6 +652,11 @@ cdef class RandomGenerator:
         >>> randomgen.randint([1, 3, 5, 7], [[10], [20]], dtype=np.uint8)
         array([[ 8,  6,  9,  7],
                [ 1, 16,  9, 12]], dtype=uint8)
+
+        References
+        ----------
+        .. [1] Daniel Lemire., "Fast Random Integer Generation in an Interval",
+               CoRR, Aug. 13, 2018, http://arxiv.org/abs/1805.10941.
         """
         if high is None:
             high = low
@@ -655,23 +667,23 @@ cdef class RandomGenerator:
             raise TypeError('Unsupported dtype "%s" for randint' % key)
 
         if key == 'int32':
-            ret =  _rand_int32(low, high, size, self._brng, self.lock)
+            ret =  _rand_int32(low, high, size, use_masked, self._brng, self.lock)
         elif key == 'int64':
-            ret =  _rand_int64(low, high, size, self._brng, self.lock)
+            ret =  _rand_int64(low, high, size, use_masked, self._brng, self.lock)
         elif key == 'int16':
-            ret =  _rand_int16(low, high, size, self._brng, self.lock)
+            ret =  _rand_int16(low, high, size, use_masked, self._brng, self.lock)
         elif key == 'int8':
-            ret =  _rand_int8(low, high, size, self._brng, self.lock)
+            ret =  _rand_int8(low, high, size, use_masked, self._brng, self.lock)
         elif key == 'uint64':
-            ret =  _rand_uint64(low, high, size, self._brng, self.lock)
+            ret =  _rand_uint64(low, high, size, use_masked, self._brng, self.lock)
         elif key == 'uint32':
-            ret =  _rand_uint32(low, high, size, self._brng, self.lock)
+            ret =  _rand_uint32(low, high, size, use_masked, self._brng, self.lock)
         elif key == 'uint16':
-            ret =  _rand_uint16(low, high, size, self._brng, self.lock)
+            ret =  _rand_uint16(low, high, size, use_masked, self._brng, self.lock)
         elif key == 'uint8':
-            ret =  _rand_uint8(low, high, size, self._brng, self.lock)
+            ret =  _rand_uint8(low, high, size, use_masked, self._brng, self.lock)
         elif key == 'bool':
-            ret =  _rand_bool(low, high, size, self._brng, self.lock)
+            ret =  _rand_bool(low, high, size, use_masked, self._brng, self.lock)
         
         if size is None and dtype in (np.bool, np.int, np.long):
                 if np.array(ret).shape == ():
@@ -3561,7 +3573,7 @@ cdef class RandomGenerator:
 
         """
         return disc(&random_geometric, self._brng, size, self.lock, 1, 0,
-                        p, 'p', CONS_BOUNDED_0_1,
+                        p, 'p', CONS_BOUNDED_GT_0_1,
                         0.0, '', CONS_NONE,
                         0.0, '', CONS_NONE)
 
@@ -4234,9 +4246,8 @@ cdef class RandomGenerator:
                     self._shuffle_raw(n, sizeof(np.npy_intp), stride, x_ptr, buf_ptr)
                 else:
                     self._shuffle_raw(n, itemsize, stride, x_ptr, buf_ptr)
-        elif isinstance(x, np.ndarray) and x.ndim > 1 and x.size:
-            # Multidimensional ndarrays require a bounce buffer.
-            buf = np.empty_like(x[0])
+        elif isinstance(x, np.ndarray) and x.ndim and x.size:
+            buf = np.empty_like(x[0,...])
             with self.lock:
                 for i in reversed(range(1, n)):
                     j = random_interval(self._brng, i)
@@ -4305,8 +4316,8 @@ cdef class RandomGenerator:
 
         # shuffle has fast-path for 1-d
         if arr.ndim == 1:
-            # must return a copy
-            if arr is x:
+            # Return a copy if same memory
+            if np.may_share_memory(arr, x):
                 arr = np.array(arr)
             self.shuffle(arr)
             return arr
